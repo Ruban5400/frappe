@@ -196,6 +196,20 @@ doc_events = {
 	"Page": {
 		"on_update": "frappe.cache_manager.build_domain_restriced_page_cache",
 	},
+	"Registration Form": {
+        "validate": "frappe.custom.registration_form.registration_form.validate_registration_form",
+        "on_update": "frappe.custom.registration_form.registration_form.on_update"
+    },
+    "Consortium": {
+        "before_save": "frappe.custom.consortium.consortium.before_save"
+    }
+	scheduler_events = {
+    "cron": {
+        "59 23 * * *": [
+            "frappe.custom.update_project_status.update_project_status"
+        	]
+    	}
+	}
 }
 
 scheduler_events = {
