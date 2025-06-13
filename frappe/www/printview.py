@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING, Optional
 
 import frappe
-from frappe import _, get_module_path
+from frappe import _, cstr, get_module_path
 from frappe.core.doctype.access_log.access_log import make_access_log
 from frappe.core.doctype.document_share_key.document_share_key import is_expired
 from frappe.utils import cint, escape_html, strip_html
@@ -49,32 +49,49 @@ def get_context(context):
 
 	print_format = get_print_format_doc(None, meta=meta)
 
-	make_access_log(
-		doctype=frappe.form_dict.doctype, document=frappe.form_dict.name, file_type="PDF", method="Print"
-	)
+	if print_format and print_format.get("print_format_builder_beta"):
+		from frappe.utils.weasyprint import get_html
 
-	print_style = None
-	body = get_rendered_template(
-		doc,
-		print_format=print_format,
-		meta=meta,
-		trigger_print=frappe.form_dict.trigger_print,
-		no_letterhead=frappe.form_dict.no_letterhead,
-		letterhead=letterhead,
-		settings=settings,
+		body = get_html(
+			doctype=frappe.form_dict.doctype, name=frappe.form_dict.name, print_format=print_format.name
+		)
+		body += trigger_print_script
+	else:
+		body = get_rendered_template(
+			doc,
+			print_format=print_format,
+			meta=meta,
+			trigger_print=frappe.form_dict.trigger_print,
+			no_letterhead=frappe.form_dict.no_letterhead,
+			letterhead=letterhead,
+			settings=settings,
+		)
+
+	# Include selected print format name in access log
+	print_format_name = getattr(print_format, "name", "Standard")
+
+	make_access_log(
+		doctype=frappe.form_dict.doctype,
+		document=frappe.form_dict.name,
+		file_type="PDF",
+		method="Print",
+		page=f"Print Format: {print_format_name}",
 	)
-	print_style = get_print_style(frappe.form_dict.style, print_format)
 
 	return {
 		"body": body,
-		"print_style": print_style,
+		"print_style": get_print_style(frappe.form_dict.style, print_format),
 		"comment": frappe.session.user,
-		"title": frappe.utils.strip_html(doc.get_title() or doc.name),
+		"title": frappe.utils.strip_html(cstr(doc.get_title() or doc.name)),
 		"lang": frappe.local.lang,
 		"layout_direction": "rtl" if is_rtl() else "ltr",
 		"doctype": frappe.form_dict.doctype,
 		"name": frappe.form_dict.name,
 		"key": frappe.form_dict.get("key"),
+		"print_format": print_format_name,
+		"letterhead": letterhead,
+		"no_letterhead": frappe.form_dict.no_letterhead,
+		"pdf_generator": frappe.form_dict.get("pdf_generator", "wkhtmltopdf"),
 	}
 
 
@@ -100,8 +117,10 @@ def get_rendered_template(
 	no_letterhead: bool | None = None,
 	letterhead: str | None = None,
 	trigger_print: bool = False,
-	settings=None,
-):
+	settings: dict | None = None,
+) -> str:
+	if not frappe.flags.ignore_print_permissions:
+		validate_print_permission(doc)
 
 	print_settings = frappe.get_single("Print Settings").as_dict()
 	print_settings.update(settings or {})
@@ -114,9 +133,6 @@ def get_rendered_template(
 
 	doc.flags.in_print = True
 	doc.flags.print_settings = print_settings
-
-	if not frappe.flags.ignore_print_permissions:
-		validate_print_permission(doc)
 
 	if doc.meta.is_submittable:
 		if doc.docstatus.is_draft() and not cint(print_settings.allow_print_for_draft):
@@ -148,7 +164,13 @@ def get_rendered_template(
 		def get_template_from_string():
 			return jenv.from_string(get_print_format(doc.doctype, print_format))
 
-		if print_format.custom_format:
+		template = None
+		if hook_func := frappe.get_hooks("get_print_format_template"):
+			template = frappe.call(hook_func[-1], jenv=jenv, print_format=print_format)
+
+		if template:
+			pass
+		elif print_format.custom_format:
 			template = get_template_from_string()
 
 		elif print_format.format_data:
@@ -180,14 +202,22 @@ def get_rendered_template(
 	letter_head = frappe._dict(get_letter_head(doc, no_letterhead, letterhead) or {})
 
 	if letter_head.content:
-		letter_head.content = frappe.utils.jinja.render_template(
-			letter_head.content, {"doc": doc.as_dict()}
-		)
+		letter_head.content = frappe.utils.jinja.render_template(letter_head.content, {"doc": doc.as_dict()})
+		if letter_head.header_script:
+			letter_head.content += f"""
+				<script>
+					{ letter_head.header_script }
+				</script>
+			"""
 
 	if letter_head.footer:
-		letter_head.footer = frappe.utils.jinja.render_template(
-			letter_head.footer, {"doc": doc.as_dict()}
-		)
+		letter_head.footer = frappe.utils.jinja.render_template(letter_head.footer, {"doc": doc.as_dict()})
+		if letter_head.footer_script:
+			letter_head.footer += f"""
+				<script>
+					{ letter_head.footer_script }
+				</script>
+			"""
 
 	convert_markdown(doc)
 
@@ -209,9 +239,7 @@ def get_rendered_template(
 		}
 	)
 	hook_func = frappe.get_hooks("pdf_body_html")
-	html = frappe.get_attr(hook_func[-1])(
-		jenv=jenv, template=template, print_format=print_format, args=args
-	)
+	html = frappe.get_attr(hook_func[-1])(jenv=jenv, template=template, print_format=print_format, args=args)
 
 	if cint(trigger_print):
 		html += trigger_print_script
@@ -332,22 +360,22 @@ def get_rendered_raw_commands(doc: str, name: str | None = None, print_format: s
 		)
 
 	return {
-		"raw_commands": get_rendered_template(
-			doc=document, name=name, print_format=print_format, meta=document.meta
-		)
+		"raw_commands": get_rendered_template(doc=document, print_format=print_format, meta=document.meta)
 	}
 
 
 def validate_print_permission(doc):
 	for ptype in ("read", "print"):
-		if frappe.has_permission(doc.doctype, ptype, doc) or frappe.has_website_permission(doc):
+		if frappe.has_permission(doc.doctype, ptype, doc):
 			return
 
-	key = frappe.form_dict.key
-	if key and isinstance(key, str):
-		validate_key(key, doc)
-	else:
-		raise frappe.PermissionError(_("You do not have permission to view this document"))
+	if frappe.has_website_permission(doc):
+		return
+
+	if (key := frappe.form_dict.key) and isinstance(key, str) and validate_key(key, doc) is not False:
+		return
+
+	doc._handle_permission_failure("print")
 
 
 def validate_key(key, doc):
@@ -366,45 +394,57 @@ def validate_key(key, doc):
 	if frappe.get_system_settings("allow_older_web_view_links") and key == doc.get_signature():
 		return
 
-	raise frappe.exceptions.InvalidKeyError
+	return False
 
 
 def get_letter_head(doc: "Document", no_letterhead: bool, letterhead: str | None = None):
 	if no_letterhead:
 		return {}
-	if letterhead:
-		return frappe.db.get_value("Letter Head", letterhead, ["content", "footer"], as_dict=True)
-	if doc.get("letter_head"):
-		return frappe.db.get_value("Letter Head", doc.letter_head, ["content", "footer"], as_dict=True)
+
+	letterhead_name = letterhead or doc.get("letter_head")
+	if letterhead_name:
+		return frappe.db.get_value(
+			"Letter Head",
+			letterhead_name,
+			["content", "footer", "header_script", "footer_script"],
+			as_dict=True,
+		)
 	else:
 		return (
-			frappe.db.get_value("Letter Head", {"is_default": 1}, ["content", "footer"], as_dict=True) or {}
+			frappe.db.get_value(
+				"Letter Head",
+				{"is_default": 1},
+				["content", "footer", "header_script", "footer_script"],
+				as_dict=True,
+			)
+			or {}
 		)
 
 
 def get_print_format(doctype, print_format):
 	if print_format.disabled:
-		frappe.throw(
-			_("Print Format {0} is disabled").format(print_format.name), frappe.DoesNotExistError
-		)
+		frappe.throw(_("Print Format {0} is disabled").format(print_format.name), frappe.DoesNotExistError)
 
 	# server, find template
 	module = print_format.module or frappe.db.get_value("DocType", doctype, "module")
-	path = os.path.join(
-		get_module_path(module, "Print Format", print_format.name),
-		frappe.scrub(print_format.name) + ".html",
-	)
 
-	if os.path.exists(path):
-		with open(path) as pffile:
-			return pffile.read()
-	else:
-		if print_format.raw_printing:
-			return print_format.raw_commands
-		if print_format.html:
-			return print_format.html
+	is_custom_module = frappe.get_cached_value("Module Def", module, "custom")
 
-		frappe.throw(_("No template found at path: {0}").format(path), frappe.TemplateNotFoundError)
+	if not is_custom_module:
+		path = os.path.join(
+			get_module_path(module, "Print Format", print_format.name),
+			frappe.scrub(print_format.name) + ".html",
+		)
+		if os.path.exists(path):
+			with open(path) as pffile:
+				return pffile.read()
+
+	if print_format.raw_printing:
+		return print_format.raw_commands
+	if print_format.html:
+		return print_format.html
+
+	frappe.throw(_("No template found at path: {0}").format(path), frappe.TemplateNotFoundError)
 
 
 def make_layout(doc, meta, format_data=None):
@@ -441,7 +481,7 @@ def make_layout(doc, meta, format_data=None):
 
 		if df.fieldtype == "Section Break" or page == []:
 			if len(page) > 1:
-				if page[-1]["has_data"] == False:
+				if not page[-1]["has_data"]:
 					# truncate last section if empty
 					del page[-1]
 

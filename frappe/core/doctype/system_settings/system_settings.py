@@ -2,6 +2,7 @@
 # License: MIT. See LICENSE
 
 import frappe
+import frappe.defaults
 from frappe import _
 from frappe.model import no_value_fields
 from frappe.model.document import Document
@@ -32,10 +33,12 @@ class SystemSettings(Document):
 		bypass_2fa_for_retricted_ip_users: DF.Check
 		bypass_restrict_ip_check_if_2fa_enabled: DF.Check
 		country: DF.Link | None
+		currency: DF.Link | None
 		currency_precision: DF.Literal["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 		date_format: DF.Literal[
 			"yyyy-mm-dd", "dd-mm-yyyy", "dd/mm/yyyy", "dd.mm.yyyy", "mm/dd/yyyy", "mm-dd-yyyy"
 		]
+		default_app: DF.Literal[None]
 		deny_multiple_sessions: DF.Check
 		disable_change_log_notification: DF.Check
 		disable_document_sharing: DF.Check
@@ -61,12 +64,14 @@ class SystemSettings(Document):
 		hide_footer_in_auto_email_reports: DF.Check
 		language: DF.Link
 		lifespan_qrcode_image: DF.Int
+		link_field_results_limit: DF.Int
 		login_with_email_link: DF.Check
 		login_with_email_link_expiry: DF.Int
 		logout_on_password_reset: DF.Check
 		max_auto_email_report_per_user: DF.Int
 		max_file_size: DF.Int
 		minimum_password_score: DF.Literal["2", "3", "4"]
+		max_report_rows: DF.Int
 		number_format: DF.Literal[
 			"#,###.##",
 			"#.###,##",
@@ -81,19 +86,21 @@ class SystemSettings(Document):
 		]
 		otp_issuer_name: DF.Data | None
 		password_reset_limit: DF.Int
+		rate_limit_email_link_login: DF.Int
 		reset_password_link_expiry_duration: DF.Duration | None
 		reset_password_template: DF.Link | None
-		rounding_method: DF.Literal[
-			"Banker's Rounding (legacy)", "Banker's Rounding", "Commercial Rounding"
-		]
+		rounding_method: DF.Literal["Banker's Rounding (legacy)", "Banker's Rounding", "Commercial Rounding"]
 		session_expiry: DF.Data | None
 		setup_complete: DF.Check
+		store_attached_pdf_document: DF.Check
 		strip_exif_metadata_from_uploaded_images: DF.Check
 		time_format: DF.Literal["HH:mm:ss", "HH:mm"]
-		time_zone: DF.Literal
+		time_zone: DF.Literal[None]
 		two_factor_method: DF.Literal["OTP App", "SMS", "Email"]
+		use_number_format_from_currency: DF.Check
 		welcome_email_template: DF.Link | None
 	# end: auto-generated types
+
 	def validate(self):
 		from frappe.twofactor import toggle_two_factor_auth
 
@@ -130,15 +137,23 @@ class SystemSettings(Document):
 		self.validate_backup_limit()
 		self.validate_file_extensions()
 
+		if not self.link_field_results_limit:
+			self.link_field_results_limit = 10
+
+		if self.link_field_results_limit > 50:
+			self.link_field_results_limit = 50
+			label = _(self.meta.get_label("link_field_results_limit"))
+			frappe.msgprint(
+				_("{0} can not be more than {1}").format(label, 50), alert=True, indicator="yellow"
+			)
+
 	def validate_user_pass_login(self):
 		if not self.disable_user_pass_login:
 			return
 
 		social_login_enabled = frappe.db.exists("Social Login Key", {"enable_social_login": 1})
 		ldap_enabled = frappe.db.get_single_value("LDAP Settings", "enabled")
-		login_with_email_link_enabled = frappe.db.get_single_value(
-			"System Settings", "login_with_email_link"
-		)
+		login_with_email_link_enabled = frappe.db.get_single_value("System Settings", "login_with_email_link")
 
 		if not (social_login_enabled or ldap_enabled or login_with_email_link_enabled):
 			frappe.throw(
@@ -195,7 +210,7 @@ def update_last_reset_password_date():
 def load():
 	from frappe.utils.momentjs import get_all_timezones
 
-	if not "System Manager" in frappe.get_roles():
+	if "System Manager" not in frappe.get_roles():
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
 	all_defaults = frappe.db.get_defaults()
@@ -206,3 +221,8 @@ def load():
 			defaults[df.fieldname] = all_defaults.get(df.fieldname)
 
 	return {"timezones": get_all_timezones(), "defaults": defaults}
+
+
+def sync_system_settings():
+	if frappe.db.get_single_value("System Settings", "currency") is None:
+		frappe.db.set_single_value("System Settings", "currency", frappe.defaults.get_defaults()["currency"])

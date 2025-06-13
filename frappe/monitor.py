@@ -1,15 +1,18 @@
 # Copyright (c) 2020, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+import datetime
 import json
 import os
 import traceback
 import uuid
-from datetime import datetime
 
+import pytz
 import rq
 
 import frappe
+from frappe.utils.data import cint
+from frappe.utils.synchronization import filelock
 
 MONITOR_REDIS_KEY = "monitor-transactions"
 MONITOR_MAX_ENTRIES = 1000000
@@ -50,7 +53,7 @@ class Monitor:
 			self.data = frappe._dict(
 				{
 					"site": frappe.local.site,
-					"timestamp": datetime.utcnow(),
+					"timestamp": datetime.datetime.now(pytz.UTC),
 					"transaction_type": transaction_type,
 					"uuid": str(uuid.uuid4()),
 				}
@@ -82,8 +85,8 @@ class Monitor:
 			self.data.job.scheduled = True
 
 		if job := rq.get_current_job():
-			self.data.uuid = job.id
-			waitdiff = self.data.timestamp - job.enqueued_at
+			self.data.job_id = job.id
+			waitdiff = self.data.timestamp - job.enqueued_at.replace(tzinfo=pytz.UTC)
 			self.data.job.wait = int(waitdiff.total_seconds() * 1000000)
 
 	def add_custom_data(self, **kwargs):
@@ -92,7 +95,7 @@ class Monitor:
 
 	def dump(self, response=None):
 		try:
-			timediff = datetime.utcnow() - self.data.timestamp
+			timediff = datetime.datetime.now(pytz.UTC) - self.data.timestamp
 			# Obtain duration in microseconds
 			self.data.duration = int(timediff.total_seconds() * 1000000)
 
@@ -114,22 +117,22 @@ class Monitor:
 			traceback.print_exc()
 
 	def store(self):
-		if frappe.cache.llen(MONITOR_REDIS_KEY) > MONITOR_MAX_ENTRIES:
-			frappe.cache.ltrim(MONITOR_REDIS_KEY, 1, -1)
 		serialized = json.dumps(self.data, sort_keys=True, default=str, separators=(",", ":"))
-		frappe.cache.rpush(MONITOR_REDIS_KEY, serialized)
+		length = frappe.cache.rpush(MONITOR_REDIS_KEY, serialized)
+		if cint(length) > MONITOR_MAX_ENTRIES:
+			frappe.cache.ltrim(MONITOR_REDIS_KEY, 1, -1)
 
 
 def flush():
-	try:
-		# Fetch all the logs without removing from cache
-		logs = frappe.cache.lrange(MONITOR_REDIS_KEY, 0, -1)
-		if logs:
-			logs = list(map(frappe.safe_decode, logs))
-			with open(log_file(), "a", os.O_NONBLOCK) as f:
-				f.write("\n".join(logs))
-				f.write("\n")
-			# Remove fetched entries from cache
-			frappe.cache.ltrim(MONITOR_REDIS_KEY, len(logs) - 1, -1)
-	except Exception:
-		traceback.print_exc()
+	logs = frappe.cache.lrange(MONITOR_REDIS_KEY, 0, -1)
+	if not logs:
+		return
+
+	logs = list(map(frappe.safe_decode, logs))
+	with filelock("monitor_flush", is_global=True, timeout=5):
+		with open(log_file(), "a") as f:
+			f.write("\n".join(logs))
+			f.write("\n")
+
+	# Remove fetched entries from cache
+	frappe.cache.ltrim(MONITOR_REDIS_KEY, len(logs) - 1, -1)

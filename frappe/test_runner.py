@@ -38,6 +38,7 @@ def xmlrunner_wrapper(output):
 
 
 def main(
+	site=None,
 	app=None,
 	module=None,
 	doctype=None,
@@ -52,6 +53,10 @@ def main(
 	case=None,
 ):
 	global unittest_runner
+
+	frappe.init(site=site)
+	if not frappe.db:
+		frappe.connect()
 
 	if doctype_list_path:
 		app, doctype_list_path = doctype_list_path.split(os.path.sep, 1)
@@ -68,9 +73,6 @@ def main(
 	try:
 		frappe.flags.print_messages = verbose
 		frappe.flags.in_test = True
-
-		if not frappe.db:
-			frappe.connect()
 
 		# workaround! since there is no separate test db
 		frappe.clear_cache()
@@ -195,7 +197,7 @@ def run_tests_for_doctype(
 	junit_xml_output=False,
 ):
 	modules = []
-	if not isinstance(doctypes, (list, tuple)):
+	if not isinstance(doctypes, list | tuple):
 		doctypes = [doctypes]
 
 	for doctype in doctypes:
@@ -248,7 +250,7 @@ def _run_unittest(
 
 	test_suite = unittest.TestSuite()
 
-	if not isinstance(modules, (list, tuple)):
+	if not isinstance(modules, list | tuple):
 		modules = [modules]
 
 	for module in modules:
@@ -329,9 +331,6 @@ def _add_test(app, path, filename, verbose, test_suite=None):
 
 
 def make_test_records(doctype, verbose=0, force=False, commit=False):
-	if not frappe.db:
-		frappe.connect()
-
 	if frappe.flags.skip_test_records:
 		return
 

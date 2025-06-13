@@ -22,12 +22,14 @@ class FormTimeline extends BaseTimeline {
 	}
 
 	setup_timeline_actions() {
-		this.add_action_button(
-			__("New Email"),
-			() => this.compose_mail(),
-			"es-line-add",
-			"btn-secondary"
-		);
+		if (frappe.model.can_email(null, this.frm)) {
+			this.add_action_button(
+				__("New Email"),
+				() => this.compose_mail(),
+				"es-line-add",
+				"btn-secondary"
+			);
+		}
 		this.setup_new_event_button();
 	}
 
@@ -66,7 +68,7 @@ class FormTimeline extends BaseTimeline {
 				.append(
 					`
 					<div class="d-flex align-items-center show-all-activity">
-						<span style="color: var(--text-light); margin:0px 6px;">Show all activity</span>
+						<span style="color: var(--text-light); margin:0px 6px;">${__("Show all activity")}</span>
 						<label class="switch">
 							<input type="checkbox">
 							<span class="slider round"></span>
@@ -234,7 +236,7 @@ class FormTimeline extends BaseTimeline {
 			communication_timeline_contents.push({
 				icon: icon_set[medium],
 				icon_size: "sm",
-				creation: communication.creation,
+				creation: communication.communication_date,
 				is_card: true,
 				content: this.get_communication_timeline_content(communication),
 				doctype: "Communication",
@@ -295,11 +297,11 @@ class FormTimeline extends BaseTimeline {
 
 	set_communication_doc_status(doc) {
 		let indicator_color = "red";
-		if (in_list(["Sent", "Clicked"], doc.delivery_status)) {
+		if (["Sent", "Clicked"].includes(doc.delivery_status)) {
 			indicator_color = "green";
-		} else if (doc.delivery_status === "Sending") {
+		} else if (["Sending", "Scheduled"].includes(doc.delivery_status)) {
 			indicator_color = "orange";
-		} else if (in_list(["Opened", "Read"], doc.delivery_status)) {
+		} else if (["Opened", "Read"].includes(doc.delivery_status)) {
 			indicator_color = "blue";
 		} else if (doc.delivery_status == "Error") {
 			indicator_color = "red";
@@ -550,11 +552,34 @@ class FormTimeline extends BaseTimeline {
 			title: communication_doc ? __("Reply") : null,
 			last_email: communication_doc,
 			subject: communication_doc && communication_doc.subject,
+			reply_all: reply_all,
 		};
 
-		if (communication_doc && reply_all) {
-			args.cc = communication_doc.cc;
-			args.bcc = communication_doc.bcc;
+		const email_accounts = frappe.boot.email_accounts
+			.filter((account) => {
+				return (
+					!["All Accounts", "Sent", "Spam", "Trash"].includes(account.email_account) &&
+					account.enable_outgoing
+				);
+			})
+			.map((e) => e.email_id);
+
+		if (communication_doc && args.is_a_reply) {
+			args.cc = "";
+			if (
+				email_accounts.includes(frappe.session.user_email) &&
+				communication_doc.sender != frappe.session.user_email
+			) {
+				// add recipients to cc if replying sender is different from last email
+				const recipients = communication_doc.recipients.split(",").map((r) => r.trim());
+				args.cc =
+					recipients.filter((r) => r != frappe.session.user_email).join(", ") + ", ";
+			}
+			if (reply_all) {
+				// if reply_all then add cc and bcc as well.
+				args.cc += cstr(communication_doc.cc);
+				args.bcc = cstr(communication_doc.bcc);
+			}
 		}
 
 		if (this.frm.doctype === "Communication") {
@@ -583,18 +608,20 @@ class FormTimeline extends BaseTimeline {
 		let edit_box = this.make_editable(edit_wrapper);
 		let content_wrapper = comment_wrapper.find(".content");
 		let more_actions_wrapper = comment_wrapper.find(".more-actions");
-		if (
-			frappe.model.can_delete("Comment") &&
-			(frappe.session.user == doc.owner || frappe.user.has_role("System Manager"))
-		) {
-			const delete_option = $(`
-				<li>
-					<a class="dropdown-item">
-						${__("Delete")}
-					</a>
-				</li>
-			`).click(() => this.delete_comment(doc.name));
-			more_actions_wrapper.find(".dropdown-menu").append(delete_option);
+		const dropdown_menu = more_actions_wrapper.find(".dropdown-menu li");
+
+		if (frappe.session.user == doc.owner || frappe.user.has_role("System Manager")) {
+			if (frappe.model.can_delete("Comment")) {
+				const delete_option = $(`
+					<a class="dropdown-item">${__("Delete")}</a>
+				`).click(() => this.delete_comment(doc.name));
+				dropdown_menu.append(delete_option);
+			}
+
+			const un_publish_button = $(`
+				<a class="dropdown-item">${doc.published ? __("Unpublish") : __("Publish")}</a>
+			`).click(() => this.update_comment_publicity(doc.name, !doc.published));
+			dropdown_menu.append(un_publish_button);
 		}
 
 		let dismiss_button = $(`
@@ -701,6 +728,37 @@ class FormTimeline extends BaseTimeline {
 				})
 				.then(() => {
 					frappe.utils.play_sound("delete");
+				});
+		});
+	}
+
+	update_comment_publicity(comment_name, publish) {
+		let message;
+		if (publish) {
+			message = __(
+				"Would you like to publish this comment? This means it will become visible to website/portal users."
+			);
+		} else {
+			message = __(
+				"Would you like to unpublish this comment? This means it will no longer be visible to website/portal users."
+			);
+		}
+
+		frappe.confirm(message, () => {
+			return frappe
+				.xcall("frappe.desk.form.utils.update_comment_publicity", {
+					name: comment_name,
+					publish,
+				})
+				.then(() => {
+					frappe.utils.play_sound("click");
+
+					// update the comment info that is stored in the frontend, then refresh the timeline
+					const comment = this.frm
+						.get_docinfo()
+						.comments.find((comment) => comment.name === comment_name);
+					comment.published = publish;
+					this.refresh();
 				});
 		});
 	}

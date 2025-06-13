@@ -41,7 +41,7 @@ context("MultiSelectDialog", () => {
 
 	it("checks multi select dialog api works", () => {
 		open_multi_select_dialog();
-		cy.get_open_dialog().should("contain", "Select Contacts");
+		cy.get_open_dialog().should("contain", "Select Contact");
 	});
 
 	it("checks for filters", () => {
@@ -76,6 +76,11 @@ context("MultiSelectDialog", () => {
 	});
 
 	it("tests more button", () => {
+		cy.get_open_dialog()
+			.get(`.frappe-control[data-fieldname="search_term"]`)
+			.find('input[data-fieldname="search_term"]')
+			.should("exist")
+			.type("Test", { delay: 200 });
 		cy.get_open_dialog()
 			.get(`.frappe-control[data-fieldname="more_child_btn"]`)
 			.should("exist")

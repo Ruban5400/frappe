@@ -1,4 +1,5 @@
 {
+ "actions": [],
  "creation": "2013-02-22 01:27:36",
  "description": "Represents the states allowed in one document and role assigned to change the state.",
  "doctype": "DocType",
@@ -12,8 +13,10 @@
   "update_value",
   "column_break_4",
   "is_optional_state",
+  "avoid_status_override",
   "next_action_email_template",
   "allow_edit",
+  "send_email",
   "section_break_9",
   "message",
   "workflow_builder_id"
@@ -30,6 +33,7 @@
    "width": "160px"
   },
   {
+   "default": "0",
    "description": "0 - Draft; 1 - Submitted; 2 - Cancelled",
    "fieldname": "doc_status",
    "fieldtype": "Select",
@@ -91,19 +95,37 @@
    "fieldtype": "Section Break"
   },
   {
-    "fieldname": "workflow_builder_id",
-    "fieldtype": "Data",
-    "hidden": 1,
-    "label": "Workflow Builder ID"
+   "fieldname": "workflow_builder_id",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Workflow Builder ID"
+  },
+  {
+   "default": "0",
+   "description": "If Checked workflow status will not override status in list view",
+   "fieldname": "avoid_status_override",
+   "fieldtype": "Check",
+   "label": "Don't Override Status"
+  },
+  {
+   "default": "1",
+   "description": "Send email when document transitions to the state.",
+   "fieldname": "send_email",
+   "fieldtype": "Check",
+   "label": "Send Email On State"
   }
  ],
  "idx": 1,
  "istable": 1,
- "modified": "2019-06-14 11:43:20.271091",
+ "links": [],
+ "modified": "2025-04-01 23:35:56.203734",
  "modified_by": "Administrator",
  "module": "Workflow",
  "name": "Workflow Document State",
  "owner": "Administrator",
  "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

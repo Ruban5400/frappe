@@ -15,9 +15,7 @@ class WorkspaceShortcut(Document):
 		from frappe.types import DF
 
 		color: DF.Color | None
-		doc_view: DF.Literal[
-			"", "List", "Report Builder", "Dashboard", "Tree", "New", "Calendar", "Kanban"
-		]
+		doc_view: DF.Literal["", "List", "Report Builder", "Dashboard", "Tree", "New", "Calendar", "Kanban"]
 		format: DF.Data | None
 		icon: DF.Data | None
 		kanban_board: DF.Link | None
@@ -26,6 +24,7 @@ class WorkspaceShortcut(Document):
 		parent: DF.Data
 		parentfield: DF.Data
 		parenttype: DF.Data
+		report_ref_doctype: DF.Link | None
 		restrict_to_domain: DF.Link | None
 		stats_filter: DF.Code | None
 		type: DF.Literal["DocType", "Report", "Page", "Dashboard", "URL"]

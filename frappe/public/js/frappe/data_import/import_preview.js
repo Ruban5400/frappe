@@ -34,7 +34,7 @@ frappe.data_import.ImportPreview = class ImportPreview {
 					<div class="col-sm-12">
 						<div class="table-actions margin-bottom">
 						</div>
-						<div class="table-preview border"></div>
+						<div class="table-preview"></div>
 						<div class="table-message"></div>
 					</div>
 				</div>
@@ -119,6 +119,10 @@ frappe.data_import.ImportPreview = class ImportPreview {
 			return row.map((cell) => {
 				if (cell == null) {
 					return "";
+				}
+
+				if (typeof cell === "string") {
+					cell = frappe.utils.xss_sanitise(cell);
 				}
 				return cell;
 			});
@@ -334,11 +338,11 @@ function get_fields_as_options(doctype, column_map) {
 	return [].concat(
 		...keys.map((key) => {
 			return column_map[key].map((df) => {
-				let label = __(df.label);
+				let label = __(df.label, null, df.parent);
 				let value = df.fieldname;
 				if (doctype !== key) {
 					let table_field = frappe.meta.get_docfield(doctype, key);
-					label = `${__(df.label)} (${__(table_field.label)})`;
+					label = `${__(df.label, null, df.parent)} (${__(table_field.label)})`;
 					value = `${table_field.fieldname}.${df.fieldname}`;
 				}
 				return {

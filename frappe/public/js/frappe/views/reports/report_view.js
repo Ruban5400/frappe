@@ -30,7 +30,13 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 				this.report_doc = doc;
 				this.report_doc.json = JSON.parse(this.report_doc.json);
 
-				this.filters = this.report_doc.json.filters;
+				this.filters = [
+					...(Array.isArray(this.report_doc.json.filters)
+						? this.report_doc.json.filters
+						: []),
+					...this.parse_filters_from_route_options(),
+				];
+
 				this.order_by = this.report_doc.json.order_by;
 				this.add_totals_row = this.report_doc.json.add_totals_row;
 				this.page_title = __(this.report_name);
@@ -98,7 +104,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		);
 		this.$paging_area
 			.find(".level-left")
-			.append(`<span class="comparison-message text-muted">${message}</span>`);
+			.after(`<span class="comparison-message text-muted">${message}</span>`);
 	}
 
 	setup_sort_selector() {
@@ -145,6 +151,24 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		if (!this.group_by) {
 			this.init_chart();
 		}
+		this.set_link_title_field_value();
+	}
+
+	set_link_title_field_value() {
+		Object.keys(this.link_title_doctype_fields).forEach(async (key) => {
+			let link_title = await this.get_link_title_field_value(
+				this.link_title_doctype_fields[key],
+				key
+			);
+			document.querySelector(`a[data-name="${key}"]`).innerHTML = link_title;
+		});
+	}
+
+	async get_link_title_field_value(doctype, value) {
+		return (
+			frappe.utils.get_link_title(doctype, value) ||
+			(await frappe.utils.fetch_link_title(doctype, value))
+		);
 	}
 
 	set_dirty_state_for_custom_report() {
@@ -221,19 +245,14 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		this.setup_datatable(this.data);
 	}
 
-	render_count() {
-		if (this.list_view_settings?.disable_count) {
-			return;
-		}
-		let $list_count = this.$paging_area.find(".list-count");
-		if (!$list_count.length) {
-			$list_count = $("<span>")
+	get_count_element() {
+		let $count = this.$paging_area.find(".list-count");
+		if (!$count.length) {
+			$count = $("<span>")
 				.addClass("text-muted list-count")
 				.prependTo(this.$paging_area.find(".level-right"));
 		}
-		this.get_count_str().then((str) => {
-			$list_count.text(str);
-		});
+		return $count;
 	}
 
 	on_update(data) {
@@ -299,6 +318,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 	}
 
 	setup_datatable(values) {
+		this.link_title_doctype_fields = [];
 		this.$datatable_wrapper.empty();
 		this.datatable = new DataTable(this.$datatable_wrapper[0], {
 			columns: this.columns,
@@ -335,7 +355,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 						columns_in_picker = columns[this.doctype]
 							.filter((df) => !this.is_column_added(df))
 							.map((df) => ({
-								label: __(df.label),
+								label: __(df.label, null, df.parent),
 								value: df.fieldname,
 							}));
 
@@ -345,7 +365,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 							columns[cdt]
 								.filter((df) => !this.is_column_added(df))
 								.map((df) => ({
-									label: __(df.label) + ` (${cdt})`,
+									label: __(df.label, null, df.parent) + ` (${cdt})`,
 									value: df.fieldname + "," + cdt,
 								}))
 								.forEach((df) => columns_in_picker.push(df));
@@ -677,6 +697,36 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		return control;
 	}
 
+	evaluate_read_only_depends_on(expression, data) {
+		let out = null;
+		if (typeof expression === "boolean") {
+			out = expression;
+		} else if (expression.substr(0, 5) == "eval:") {
+			try {
+				out = frappe.utils.eval(expression.substr(5), { doc: data });
+				if (parent && parent.istable && expression.includes("is_submittable")) {
+					out = true;
+				}
+			} catch (e) {
+				frappe.throw(__('Invalid "depends_on" expression'));
+			}
+		} else if (expression.substr(0, 3) == "fn:" && this.frm) {
+			out = this.frm.script_manager.trigger(
+				expression.substr(3),
+				this.doctype,
+				this.docname
+			);
+		} else {
+			var value = data[expression];
+			if ($.isArray(value)) {
+				out = !!value.length;
+			} else {
+				out = !!value;
+			}
+		}
+		return out;
+	}
+
 	is_editable(df, data) {
 		if (
 			df &&
@@ -690,8 +740,14 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 			!df.hidden &&
 			// not a standard field i.e., owner, modified_by, etc.
 			frappe.model.is_non_std_field(df.fieldname)
-		)
-			return true;
+		) {
+			// don't check read_only_depends_on if there's child table fields
+			return (
+				this.meta.fields.some((df) => df.fieldtype === "Table") ||
+				(df.read_only_depends_on &&
+					!this.evaluate_read_only_depends_on(df.read_only_depends_on, data))
+			);
+		}
 		return false;
 	}
 
@@ -890,14 +946,16 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 	get_columns_for_picker() {
 		let out = {};
 
-		const standard_fields_filter = (df) => !in_list(frappe.model.no_value_type, df.fieldtype);
+		const standard_fields_filter = (df) => !frappe.model.no_value_type.includes(df.fieldtype);
 
 		let doctype_fields = frappe.meta
 			.get_docfields(this.doctype)
 			.filter(standard_fields_filter);
 
 		// filter out docstatus field from picker
-		let std_fields = frappe.model.std_fields.filter((df) => df.fieldname !== "docstatus");
+		let std_fields = frappe.model.std_fields.filter(
+			(df) => !["docstatus", "_comments"].includes(df.fieldname)
+		);
 
 		// add status field derived from docstatus, if status is not a standard field
 		let has_status_values = false;
@@ -962,7 +1020,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 					return !df.hidden && df.fieldname !== "name";
 				})
 				.map((df) => ({
-					label: __(df.label),
+					label: __(df.label, null, df.parent),
 					value: df.fieldname,
 					checked: this.fields.find(
 						(f) => f[0] === df.fieldname && f[1] === this.doctype
@@ -978,7 +1036,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 			const cdt = df.options;
 
 			dialog_fields.push({
-				label: __(df.label) + ` (${__(cdt)})`,
+				label: __(df.label, null, df.parent) + ` (${__(cdt)})`,
 				fieldname: df.options,
 				fieldtype: "MultiCheck",
 				columns: 2,
@@ -987,7 +1045,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 						return !df.hidden;
 					})
 					.map((df) => ({
-						label: __(df.label),
+						label: __(df.label, null, df.parent),
 						value: df.fieldname,
 						checked: this.fields.find((f) => f[0] === df.fieldname && f[1] === cdt),
 					})),
@@ -1076,7 +1134,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		}
 		if (!docfield || docfield.report_hide) return;
 
-		let title = __(docfield.label);
+		let title = __(docfield.label, null, docfield.parent);
 		if (doctype !== this.doctype) {
 			title += ` (${__(doctype)})`;
 		}
@@ -1135,6 +1193,17 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 				if (Array.isArray(row)) {
 					doc = row.reduce((acc, curr) => {
 						if (!curr.column.docfield) return acc;
+
+						if (
+							curr.column.docfield.fieldtype == "Link" &&
+							frappe.boot.link_title_doctypes.includes(
+								curr.column.docfield.options
+							) &&
+							curr.html
+						) {
+							this.link_title_doctype_fields[curr.content] =
+								curr.column.docfield.options;
+						}
 						acc[curr.column.docfield.fieldname] = curr.content;
 						return acc;
 					}, {});
@@ -1194,7 +1263,6 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 				// child table field
 				const cdt_field = (f) => `${col.docfield.parent}:${f}`;
 				const name = d[cdt_field("name")];
-
 				return {
 					name: name,
 					doctype: col.docfield.parent,
@@ -1252,6 +1320,10 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		}
 
 		return items;
+	}
+
+	clear_checked_items() {
+		this.datatable.rowmanager.checkAll(false);
 	}
 
 	save_report(save_type) {
@@ -1471,7 +1543,8 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 					if (this.add_totals_row) {
 						const total_data = this.get_columns_totals(this.data);
 
-						total_data["name"] = __("Totals").bold();
+						total_data["name"] = __("Total");
+						total_data.is_total_row = true;
 						rows_in_order.push(total_data);
 					}
 
@@ -1551,15 +1624,33 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 					const args = this.get_args();
 					const selected_items = this.get_checked_items(true);
 
-					let extra_fields = null;
-					if (this.total_count > (this.count_without_children || args.page_length)) {
+					let extra_fields = [];
+					if (this.list_view_settings.disable_count) {
 						extra_fields = [
 							{
 								fieldtype: "Check",
 								fieldname: "export_all_rows",
-								label: __("Export All {0} rows?", [`<b>${this.total_count}</b>`]),
+								label: __("Export all matching rows?"),
 							},
 						];
+					} else if (
+						this.total_count > (this.count_without_children || args.page_length)
+					) {
+						extra_fields = [
+							{
+								fieldtype: "Check",
+								fieldname: "export_all_rows",
+								label: __("Export all {0} rows?", [`<b>${this.total_count}</b>`]),
+							},
+						];
+					}
+					if (frappe.boot.lang !== "en") {
+						extra_fields.push({
+							fieldtype: "Check",
+							fieldname: "translate_values",
+							label: __("Translate values"),
+							default: 1,
+						});
 					}
 
 					const d = frappe.report_utils.get_export_dialog(
@@ -1569,6 +1660,7 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 							args.cmd = "frappe.desk.reportview.export_query";
 							args.file_format_type = data.file_format;
 							args.title = this.report_name || this.doctype;
+							args.translate_values = data.translate_values;
 
 							if (data.file_format == "CSV") {
 								args.csv_delimiter = data.csv_delimiter;
@@ -1669,5 +1761,35 @@ frappe.views.ReportView = class ReportView extends frappe.views.ListView {
 		}
 
 		return items.map((i) => Object.assign(i, { standard: true }));
+	}
+
+	get_search_params() {
+		let search_params = super.get_search_params();
+		let config = this.group_by_control.get_settings();
+		if (config) {
+			search_params.append(
+				"_group_by",
+				JSON.stringify([config.group_by, config.aggregate_on, config.aggregate_function])
+			);
+		}
+		return search_params;
+	}
+
+	parse_filters_from_route_options() {
+		if (frappe.route_options?._group_by) {
+			try {
+				let config = JSON.parse(frappe.route_options._group_by);
+				this.group_by_control.apply_settings({
+					group_by: config[0],
+					aggregate_on: config[1],
+					aggregate_function: config[2],
+				});
+				delete frappe.route_options["_group_by"];
+			} catch (e) {
+				console.warn("Failed to parse group by from URL", e);
+			}
+		}
+
+		return super.parse_filters_from_route_options();
 	}
 };

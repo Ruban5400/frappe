@@ -69,8 +69,17 @@ def update_comment(name, content):
 
 
 @frappe.whitelist()
-def get_next(doctype, value, prev, filters=None, sort_order="desc", sort_field="modified"):
+def update_comment_publicity(name: str, publish: bool):
+	doc = frappe.get_doc("Comment", name)
+	if frappe.session.user != doc.owner and "System Manager" not in frappe.get_roles():
+		frappe.throw(_("Comment publicity can only be updated by the original author or a System Manager."))
 
+	doc.published = int(publish)
+	doc.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
+def get_next(doctype, value, prev, filters=None, sort_order="desc", sort_field="modified"):
 	prev = int(prev)
 	if not filters:
 		filters = []
@@ -106,6 +115,4 @@ def get_next(doctype, value, prev, filters=None, sort_order="desc", sort_field="
 
 
 def get_pdf_link(doctype, docname, print_format="Standard", no_letterhead=0):
-	return "/api/method/frappe.utils.print_format.download_pdf?doctype={doctype}&name={docname}&format={print_format}&no_letterhead={no_letterhead}".format(
-		doctype=doctype, docname=docname, print_format=print_format, no_letterhead=no_letterhead
-	)
+	return f"/api/method/frappe.utils.print_format.download_pdf?doctype={doctype}&name={docname}&format={print_format}&no_letterhead={no_letterhead}"

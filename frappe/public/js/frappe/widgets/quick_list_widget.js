@@ -19,7 +19,9 @@ export default class QuickListWidget extends Widget {
 	set_actions() {
 		if (this.in_customize_mode) return;
 
-		this.setup_add_new_button();
+		if (frappe.model.can_create(this.document_type)) {
+			this.setup_add_new_button();
+		}
 		this.setup_refresh_list_button();
 		this.setup_filter_list_button();
 	}
@@ -27,7 +29,7 @@ export default class QuickListWidget extends Widget {
 	setup_add_new_button() {
 		this.add_new_button = $(
 			`<div class="add-new btn btn-xs pull-right"
-			title="${__("Add New")}  ${__(this.document_type)}
+			title="${__("Add New")} ${__(this.document_type)}
 			">
 				${frappe.utils.icon("add", "sm")}
 			</div>`
@@ -104,7 +106,7 @@ export default class QuickListWidget extends Widget {
 			primary_action: function () {
 				let old_filter = me.quick_list_filter;
 				let filters = me.filter_group.get_filters();
-				me.quick_list_filter = JSON.parse(filters);
+				me.quick_list_filter = JSON.stringify(filters);
 
 				this.hide();
 
@@ -114,7 +116,7 @@ export default class QuickListWidget extends Widget {
 					me.set_body();
 				}
 			},
-			primary_action_label: __("Set"),
+			primary_action_label: __("Save"),
 		});
 
 		this.dialog.show();
@@ -133,6 +135,8 @@ export default class QuickListWidget extends Widget {
 	}
 
 	setup_quick_list_item(doc) {
+		const indicator = frappe.get_indicator(doc, this.document_type);
+
 		let $quick_list_item = $(`
 			<div class="quick-list-item">
 				<div class="ellipsis left">
@@ -147,9 +151,18 @@ export default class QuickListWidget extends Widget {
 			</div>
 		`);
 
-		$(`<div class="right-arrow">${frappe.utils.icon("right", "xs")}</div>`).appendTo(
-			$quick_list_item
-		);
+		if (indicator) {
+			$(`
+				<div class="status indicator-pill ${indicator[1]} ellipsis">
+					${__(indicator[0])}
+				</div>
+			`).appendTo($quick_list_item);
+		}
+		let icon_to_append = `<div class="right-arrow">${frappe.utils.icon("right", "xs")}</div>`;
+		if (frappe.utils.is_rtl(frappe.boot.lang)) {
+			icon_to_append = `<div class="left-arrow">${frappe.utils.icon("left", "xs")}</div>`;
+		}
+		$(icon_to_append).appendTo($quick_list_item);
 
 		$quick_list_item.click((e) => {
 			if (e.ctrlKey || e.metaKey) {
@@ -185,13 +198,17 @@ export default class QuickListWidget extends Widget {
 			if (this.has_status_field) {
 				fields.push("status");
 				fields.push("docstatus");
-
-				// add workflow state field if workflow exist & is active
-				let workflow_fieldname = frappe.workflow.get_state_fieldname(this.document_type);
-				workflow_fieldname && fields.push(workflow_fieldname);
 			}
-
+			// add workflow state field if workflow exist & is active
+			let workflow_fieldname = frappe.workflow.get_state_fieldname(this.document_type);
+			workflow_fieldname && fields.push(workflow_fieldname);
 			fields.push("modified");
+
+			let add_fields = frappe.listview_settings?.[this.document_type]?.add_fields;
+			if (Array.isArray(add_fields)) {
+				fields.push(...add_fields);
+				fields = [...new Set(fields)];
+			}
 
 			let quick_list_filter = frappe.utils.process_filter_expression(this.quick_list_filter);
 

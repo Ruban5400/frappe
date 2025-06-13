@@ -40,6 +40,7 @@ class PrintFormat(Document):
 		page_number: DF.Literal[
 			"Hide", "Top Left", "Top Center", "Top Right", "Bottom Left", "Bottom Center", "Bottom Right"
 		]
+		pdf_generator: DF.Literal["wkhtmltopdf"]
 		print_format_builder: DF.Check
 		print_format_builder_beta: DF.Check
 		print_format_type: DF.Literal["Jinja", "JS"]
@@ -47,7 +48,9 @@ class PrintFormat(Document):
 		raw_printing: DF.Check
 		show_section_headings: DF.Check
 		standard: DF.Literal["No", "Yes"]
+
 	# end: auto-generated types
+
 	def onload(self):
 		templates = frappe.get_all(
 			"Print Format Field Template",
@@ -66,9 +69,10 @@ class PrintFormat(Document):
 		if (
 			self.standard == "Yes"
 			and not frappe.local.conf.get("developer_mode")
-			and not (frappe.flags.in_import or frappe.flags.in_test)
+			and not frappe.flags.in_migrate
+			and not frappe.flags.in_install
+			and not frappe.flags.in_test
 		):
-
 			frappe.throw(frappe._("Standard Print Format cannot be updated"))
 
 		# old_doc_type is required for clearing item cache
@@ -83,9 +87,7 @@ class PrintFormat(Document):
 			validate_template(self.html)
 
 		if self.custom_format and self.raw_printing and not self.raw_commands:
-			frappe.throw(
-				_("{0} are required").format(frappe.bold(_("Raw Commands"))), frappe.MandatoryError
-			)
+			frappe.throw(_("{0} are required").format(frappe.bold(_("Raw Commands"))), frappe.MandatoryError)
 
 		if self.custom_format and not self.html and not self.raw_printing:
 			frappe.throw(_("{0} is required").format(frappe.bold(_("HTML"))), frappe.MandatoryError)
@@ -141,7 +143,7 @@ class PrintFormat(Document):
 @frappe.whitelist()
 def make_default(name):
 	"""Set print format as default"""
-	frappe.has_permission("Print Format", "write")
+	frappe.has_permission("Print Format", "write", throw=True)
 
 	print_format = frappe.get_doc("Print Format", name)
 

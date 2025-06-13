@@ -109,7 +109,7 @@ frappe.ui.SortSelector = class SortSelector {
 				this.args.sort_order = meta_sort_order;
 			} else {
 				// default
-				this.args.sort_by = "modified";
+				this.args.sort_by = "creation";
 				this.args.sort_order = "desc";
 			}
 		}
@@ -163,7 +163,7 @@ frappe.ui.SortSelector = class SortSelector {
 
 		// set default
 		this.sort_by = this.args.sort_by;
-		this.sort_order = this.args.sort_order;
+		this.sort_order = this.args.sort_order = this.args.sort_order.toLowerCase();
 	}
 	get_meta_sort_field() {
 		var meta = frappe.get_meta(this.doctype);
@@ -175,11 +175,11 @@ frappe.ui.SortSelector = class SortSelector {
 			};
 		}
 
-		if (meta.sort_field && meta.sort_field.includes(",")) {
+		if (meta.sort_field) {
 			var parts = meta.sort_field.split(",")[0].split(" ");
 			return {
 				meta_sort_field: parts[0],
-				meta_sort_order: parts[1],
+				meta_sort_order: meta.sort_order ? meta.sort_order.toLowerCase() : "",
 			};
 		} else {
 			return {

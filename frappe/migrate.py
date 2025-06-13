@@ -76,6 +76,7 @@ class SiteMigration:
 		"""Complete setup required for site migration"""
 		frappe.flags.touched_tables = set()
 		self.touched_tables_file = frappe.get_site_path("touched_tables.json")
+		frappe.clear_cache()
 		add_column(doctype="DocType", column_name="migration_hash", fieldtype="Data")
 		clear_global_cache()
 
@@ -145,6 +146,8 @@ class SiteMigration:
 
 		frappe.get_single("Portal Settings").sync_menu()
 		frappe.get_single("Installed Applications").update_versions()
+
+		print("Executing `after_migrate` hooks...")
 
 		for app in frappe.get_installed_apps():
 			for fn in frappe.get_hooks("after_migrate", app_name=app):

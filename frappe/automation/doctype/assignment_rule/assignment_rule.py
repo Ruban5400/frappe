@@ -9,6 +9,7 @@ from frappe.cache_manager import clear_doctype_map, get_doctype_map
 from frappe.desk.form import assign_to
 from frappe.model import log_types
 from frappe.model.document import Document
+from frappe.utils.data import comma_and
 
 
 class AssignmentRule(Document):
@@ -30,13 +31,14 @@ class AssignmentRule(Document):
 		description: DF.SmallText
 		disabled: DF.Check
 		document_type: DF.Link
-		due_date_based_on: DF.Literal
-		field: DF.Literal
+		due_date_based_on: DF.Literal[None]
+		field: DF.Literal[None]
 		last_user: DF.Link | None
 		priority: DF.Int
 		rule: DF.Literal["Round Robin", "Load Balancing", "Based on Field"]
 		unassign_condition: DF.Code | None
 		users: DF.TableMultiSelect[AssignmentRuleUser]
+
 	# end: auto-generated types
 	def validate(self):
 		self.validate_document_types()
@@ -50,19 +52,15 @@ class AssignmentRule(Document):
 	def validate_document_types(self):
 		if self.document_type == "ToDo":
 			frappe.throw(
-				_("Assignment Rule is not allowed on {0} document type").format(frappe.bold("ToDo"))
+				_("Assignment Rule is not allowed on document type {0}").format(frappe.bold(_("ToDo")))
 			)
 
 	def validate_assignment_days(self):
 		assignment_days = self.get_assignment_days()
-
 		if len(set(assignment_days)) != len(assignment_days):
-			repeated_days = get_repeated(assignment_days)
-			plural = "s" if len(repeated_days) > 1 else ""
-
 			frappe.throw(
-				_("Assignment Day{0} {1} has been repeated.").format(
-					plural, frappe.bold(", ".join(repeated_days))
+				_("The following Assignment Days have been repeated: {0}").format(
+					comma_and([_(day) for day in get_repeated(assignment_days)], add_quotes=False)
 				)
 			)
 
@@ -194,7 +192,7 @@ def get_assignments(doc) -> list[dict]:
 		"ToDo",
 		fields=["name", "assignment_rule"],
 		filters=dict(
-			reference_type=doc.get("doctype"), reference_name=doc.get("name"), status=("!=", "Cancelled")
+			reference_type=doc.get("doctype"), reference_name=str(doc.get("name")), status=("!=", "Cancelled")
 		),
 		limit=5,
 	)
@@ -222,7 +220,7 @@ def reopen_closed_assignment(doc):
 		"ToDo",
 		filters={
 			"reference_type": doc.doctype,
-			"reference_name": doc.name,
+			"reference_name": str(doc.name),
 			"status": "Closed",
 		},
 		pluck="name",
@@ -314,7 +312,7 @@ def apply(doc=None, method=None, doctype=None, name=None):
 						"ToDo",
 						filters={
 							"reference_type": doc.doctype,
-							"reference_name": doc.name,
+							"reference_name": str(doc.name),
 						},
 						pluck="name",
 					)
@@ -360,9 +358,7 @@ def update_due_date(doc, state=None):
 		rule_doc = frappe.get_cached_doc("Assignment Rule", rule.get("name"))
 		due_date_field = rule_doc.due_date_based_on
 		field_updated = (
-			doc.meta.has_field(due_date_field)
-			and doc.has_value_changed(due_date_field)
-			and rule.get("name")
+			doc.meta.has_field(due_date_field) and doc.has_value_changed(due_date_field) and rule.get("name")
 		)
 
 		if field_updated:
@@ -371,7 +367,7 @@ def update_due_date(doc, state=None):
 				filters={
 					"assignment_rule": rule.get("name"),
 					"reference_type": doc.doctype,
-					"reference_name": doc.name,
+					"reference_name": str(doc.name),
 					"status": "Open",
 				},
 				pluck="name",

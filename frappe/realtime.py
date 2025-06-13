@@ -9,24 +9,25 @@ import frappe
 from frappe.utils.data import cstr
 
 
-def publish_progress(percent, title=None, doctype=None, docname=None, description=None):
+def publish_progress(percent, title=None, doctype=None, docname=None, description=None, task_id=None):
 	publish_realtime(
 		"progress",
 		{"percent": percent, "title": title, "description": description},
 		user=None if doctype and docname else frappe.session.user,
 		doctype=doctype,
 		docname=docname,
+		task_id=task_id,
 	)
 
 
 def publish_realtime(
-	event: str = None,
-	message: dict = None,
-	room: str = None,
-	user: str = None,
-	doctype: str = None,
-	docname: str = None,
-	task_id: str = None,
+	event: str | None = None,
+	message: dict | None = None,
+	room: str | None = None,
+	user: str | None = None,
+	doctype: str | None = None,
+	docname: str | None = None,
+	task_id: str | None = None,
 	after_commit: bool = False,
 ):
 	"""Publish real-time updates
@@ -41,8 +42,11 @@ def publish_realtime(
 	if message is None:
 		message = {}
 
+	if not task_id and hasattr(frappe.local, "task_id"):
+		task_id = frappe.local.task_id
+
 	if event is None:
-		event = "task_progress" if frappe.local.task_id else "global"
+		event = "task_progress" if task_id else "global"
 	elif event == "msgprint" and not user:
 		user = frappe.session.user
 	elif event == "list_update":
@@ -50,9 +54,6 @@ def publish_realtime(
 		room = get_doctype_room(doctype)
 	elif event == "docinfo_update":
 		room = get_doc_room(doctype, docname)
-
-	if not task_id and hasattr(frappe.local, "task_id"):
-		task_id = frappe.local.task_id
 
 	if not room:
 		if task_id:
@@ -114,11 +115,7 @@ def emit_via_redis(event, message, room):
 
 @frappe.whitelist(allow_guest=True)
 def can_subscribe_doc(doctype: str, docname: str) -> bool:
-	from frappe.exceptions import PermissionError
-
-	if not frappe.has_permission(doctype=doctype, doc=docname, ptype="read"):
-		raise PermissionError()
-
+	frappe.has_permission(doctype, doc=docname, throw=True)
 	return True
 
 
@@ -134,9 +131,13 @@ def can_subscribe_doctype(doctype: str) -> bool:
 
 @frappe.whitelist(allow_guest=True)
 def get_user_info():
+	user_type = frappe.session.data.user_type
+	# For requests with Bearer tokens, user_type is not set in the session data
+	if not user_type:
+		user_type = frappe.get_cached_value("User", frappe.session.user, "user_type")
 	return {
 		"user": frappe.session.user,
-		"user_type": frappe.session.data.user_type,
+		"user_type": user_type,
 	}
 
 

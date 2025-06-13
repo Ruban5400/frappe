@@ -242,9 +242,7 @@ def create_web_page(title, route, single_thread):
 	web_page = frappe.db.exists("Web Page", {"route": route})
 	if web_page:
 		return web_page
-	web_page = frappe.get_doc(
-		{"doctype": "Web Page", "title": title, "route": route, "published": True}
-	)
+	web_page = frappe.get_doc({"doctype": "Web Page", "title": title, "route": route, "published": True})
 	web_page.save()
 
 	web_page.append(
@@ -401,7 +399,6 @@ def insert_translations():
 
 @whitelist_for_tests
 def create_blog_post():
-
 	blog_category = frappe.get_doc(
 		{"name": "general", "doctype": "Blog Category", "title": "general"}
 	).insert(ignore_if_duplicate=True)
@@ -499,6 +496,9 @@ def setup_image_doctype():
 @whitelist_for_tests
 def setup_inbox():
 	frappe.db.delete("User Email")
+	doc = frappe.new_doc("Email Account")
+	doc.email_id = "email_linking@example.com"
+	doc.insert(ignore_permissions=True, ignore_if_duplicate=True)
 
 	user = frappe.get_doc("User", frappe.session.user)
 	user.append("user_emails", {"email_account": "Email Linking"})

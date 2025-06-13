@@ -7,7 +7,7 @@ frappe.listview_settings["DocType"] = {
 		let non_developer = frappe.session.user !== "Administrator" || !frappe.boot.developer_mode;
 		let fields = [
 			{
-				label: __("DocType Name"),
+				label: __("Name"),
 				fieldname: "name",
 				fieldtype: "Data",
 				reqd: 1,
@@ -101,6 +101,7 @@ frappe.listview_settings["DocType"] = {
 								role: "System Manager",
 								share: 1,
 								write: 1,
+								submit: values.is_submittable ? 1 : 0,
 							},
 						],
 						fields: [{ fieldtype: "Section Break" }],

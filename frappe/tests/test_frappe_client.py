@@ -74,9 +74,7 @@ class TestFrappeClient(FrappeTestCase):
 		server = FrappeClient(get_url(), "Administrator", self.PASSWORD, verify=False)
 		server.insert({"doctype": "Note", "title": "get_value", "content": CONTENT}).get("name")
 
-		self.assertEqual(
-			server.get_value("Note", "content", {"title": "get_value"}).get("content"), CONTENT
-		)
+		self.assertEqual(server.get_value("Note", "content", {"title": "get_value"}).get("content"), CONTENT)
 
 	def test_get_value_by_name(self):
 		server = FrappeClient(get_url(), "Administrator", self.PASSWORD, verify=False)
@@ -107,7 +105,9 @@ class TestFrappeClient(FrappeTestCase):
 		self.assertEqual(
 			server.get_value("Website Settings", "title_prefix").get("title_prefix"), "test-prefix"
 		)
+		frappe.db.rollback()  # Clear snapshot isolation
 		frappe.db.set_single_value("Website Settings", "title_prefix", "")
+		frappe.db.commit()
 
 	def test_update_doc(self):
 		server = FrappeClient(get_url(), "Administrator", self.PASSWORD, verify=False)

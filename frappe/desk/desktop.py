@@ -49,10 +49,10 @@ class Workspace:
 
 		self.can_read = self.get_cached("user_perm_can_read", self.get_can_read_items)
 
-		self.allowed_pages = get_allowed_pages(cache=True)
-		self.allowed_reports = get_allowed_reports(cache=True)
-
 		if not minimal:
+			self.allowed_pages = get_allowed_pages(cache=True)
+			self.allowed_reports = get_allowed_reports(cache=True)
+
 			if self.doc.content:
 				self.onboarding_list = [
 					x["data"]["onboarding_name"] for x in loads(self.doc.content) if x["type"] == "onboarding"
@@ -86,7 +86,7 @@ class Workspace:
 
 	def get_cached(self, cache_key, fallback_fn):
 		value = frappe.cache.get_value(cache_key, user=frappe.session.user)
-		if value:
+		if value is not None:
 			return value
 
 		value = fallback_fn()
@@ -141,8 +141,12 @@ class Workspace:
 		if item_type == "doctype":
 			return name in self.can_read or [] and name in self.restricted_doctypes or []
 		if item_type == "page":
+			if not self.allowed_pages:
+				self.allowed_pages = get_allowed_pages(cache=True)
 			return name in self.allowed_pages and name in self.restricted_pages
 		if item_type == "report":
+			if not self.allowed_reports:
+				self.allowed_reports = get_allowed_reports(cache=True)
 			return name in self.allowed_reports
 		if item_type == "help":
 			return True
@@ -176,7 +180,6 @@ class Workspace:
 
 	def _prepare_item(self, item):
 		if item.dependencies:
-
 			dependencies = [dep.strip() for dep in item.dependencies.split(",")]
 
 			incomplete_dependencies = [d for d in dependencies if not self._doctype_contains_a_record(d)]
@@ -194,6 +197,9 @@ class Workspace:
 
 				item["count"] = count
 
+		if item.get("link_type") == "DocType":
+			item["description"] = frappe.get_meta(item.link_to).description
+
 		# Translate label
 		item["label"] = _(item.label) if item.label else _(item.name)
 
@@ -203,8 +209,7 @@ class Workspace:
 		from frappe.utils import has_common
 
 		allowed = [
-			d.role
-			for d in frappe.get_all("Has Role", fields=["role"], filters={"parent": custom_block_name})
+			d.role for d in frappe.get_all("Has Role", fields=["role"], filters={"parent": custom_block_name})
 		]
 
 		if not allowed:
@@ -415,11 +420,14 @@ def get_workspace_sidebar_items():
 	has_access = "Workspace Manager" in frappe.get_roles()
 
 	# don't get domain restricted pages
-	blocked_modules = frappe.get_doc("User", frappe.session.user).get_blocked_modules()
+	blocked_modules = frappe.get_cached_doc("User", frappe.session.user).get_blocked_modules()
 	blocked_modules.append("Dummy Module")
 
+	# adding None to allowed_domains to include pages without domain restriction
+	allowed_domains = [None, *frappe.get_active_domains()]
+
 	filters = {
-		"restrict_to_domain": ["in", frappe.get_active_domains()],
+		"restrict_to_domain": ["in", allowed_domains],
 		"module": ["not in", blocked_modules],
 	}
 
@@ -465,7 +473,11 @@ def get_workspace_sidebar_items():
 		pages = [frappe.get_doc("Workspace", "Welcome Workspace").as_dict()]
 		pages[0]["label"] = _("Welcome Workspace")
 
-	return {"pages": pages, "has_access": has_access}
+	return {
+		"pages": pages,
+		"has_access": has_access,
+		"has_create_access": frappe.has_permission(doctype="Workspace", ptype="create"),
+	}
 
 
 def get_table_with_counts():
@@ -522,6 +534,7 @@ def get_custom_report_list(module):
 			else 0,
 			"label": _(r.name),
 			"link_to": r.name,
+			"report_ref_doctype": r.ref_doctype,
 		}
 		for r in reports
 	]
@@ -542,9 +555,7 @@ def save_new_widget(doc, page, blocks, new_widgets):
 				new_widget(widgets.custom_block, "Workspace Custom Block", "custom_blocks")
 			)
 		if widgets.number_card:
-			doc.number_cards.extend(
-				new_widget(widgets.number_card, "Workspace Number Card", "number_cards")
-			)
+			doc.number_cards.extend(new_widget(widgets.number_card, "Workspace Number Card", "number_cards"))
 		if widgets.card:
 			doc.build_links_table_from_card(widgets.card)
 
@@ -558,13 +569,11 @@ def save_new_widget(doc, page, blocks, new_widgets):
 		json_config = widgets and dumps(widgets, sort_keys=True, indent=4)
 
 		# Error log body
-		log = """
-		page: {}
-		config: {}
-		exception: {}
-		""".format(
-			page, json_config, e
-		)
+		log = f"""
+		page: {page}
+		config: {json_config}
+		exception: {e}
+		"""
 		doc.log_error("Could not save customization", log)
 		return False
 

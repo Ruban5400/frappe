@@ -29,16 +29,27 @@ frappe.search.AwesomeBar = class AwesomeBar {
 				};
 			},
 			item: function (item, term) {
-				var d = this.get_item(item.value);
-				var name = __(d.label || d.value);
-				var html = "<span>" + name + "</span>";
+				const d = this.get_item(item.value);
+				let target = "#";
+				if (d.route) {
+					target = frappe.router.make_url(
+						frappe.router.convert_from_standard_route(
+							frappe.router.get_route_from_arguments(
+								typeof d.route === "string" ? [d.route] : d.route
+							)
+						)
+					);
+				}
+				let html = `<span>${__(d.label || d.value)}</span>`;
+
 				if (d.description && d.value !== d.description) {
 					html +=
 						'<br><span class="text-muted ellipsis">' + __(d.description) + "</span>";
 				}
+
 				return $("<li></li>")
 					.data("item.autocomplete", d)
-					.html(`<a style="font-weight:normal">${html}</a>`)
+					.html(`<a style="font-weight:normal" href="${target}">${html}</a>`)
 					.get(0);
 			},
 			sort: function (a, b) {
@@ -306,12 +317,17 @@ frappe.search.AwesomeBar = class AwesomeBar {
 		var route = frappe.get_route();
 		if (route[0] === "List" && txt.indexOf(" in") === -1) {
 			// search in title field
-			var meta = frappe.get_meta(frappe.container.page.list_view.doctype);
+			const doctype = frappe.container.page?.list_view?.doctype;
+			if (!doctype) return;
+			var meta = frappe.get_meta(doctype);
 			var search_field = meta.title_field || "name";
 			var options = {};
 			options[search_field] = ["like", "%" + txt + "%"];
 			this.options.push({
-				label: __("Find {0} in {1}", [txt.bold(), __(route[1]).bold()]),
+				label: __("Find {0} in {1}", [
+					frappe.utils.xss_sanitise(txt).bold(),
+					__(route[1]).bold(),
+				]),
 				value: __("Find {0} in {1}", [txt, __(route[1])]),
 				route_options: options,
 				onclick: function () {

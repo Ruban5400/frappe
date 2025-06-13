@@ -5,11 +5,6 @@ import click
 import frappe
 from frappe.database.db_manager import DbManager
 
-REQUIRED_MARIADB_CONFIG = {
-	"character_set_server": "utf8mb4",
-	"collation_server": "utf8mb4_unicode_ci",
-}
-
 
 def get_mariadb_variables():
 	return frappe._dict(frappe.db.sql("show variables"))
@@ -23,15 +18,16 @@ def get_mariadb_version(version_string: str = ""):
 	return version.rsplit(".", 1)
 
 
-def setup_database(force, source_sql, verbose, no_mariadb_socket=False):
+def setup_database(force, verbose, mariadb_user_host_login_scope=None):
 	frappe.local.session = frappe._dict({"user": "Administrator"})
 
 	db_name = frappe.local.conf.db_name
 	root_conn = get_root_connection(frappe.flags.root_login, frappe.flags.root_password)
 	dbman = DbManager(root_conn)
 	dbman_kwargs = {}
-	if no_mariadb_socket:
-		dbman_kwargs["host"] = "%"
+
+	if mariadb_user_host_login_scope is not None:
+		dbman_kwargs["host"] = mariadb_user_host_login_scope
 
 	if force or (db_name not in dbman.get_database_list()):
 		dbman.delete_user(db_name, **dbman_kwargs)
@@ -55,8 +51,6 @@ def setup_database(force, source_sql, verbose, no_mariadb_socket=False):
 	# close root connection
 	root_conn.close()
 
-	bootstrap_database(db_name, verbose, source_sql)
-
 
 def drop_user_and_database(db_name, root_login, root_password):
 	frappe.local.db = get_root_connection(root_login, root_password)
@@ -66,26 +60,22 @@ def drop_user_and_database(db_name, root_login, root_password):
 	dbman.delete_user(db_name)
 
 
-def bootstrap_database(db_name, verbose, source_sql=None):
+def bootstrap_database(verbose, source_sql=None):
 	import sys
 
-	frappe.connect(db_name=db_name)
-	if not check_database_settings():
-		print("Database settings do not match expected values; stopping database setup.")
-		sys.exit(1)
+	frappe.connect()
+	check_compatible_versions()
 
 	import_db_from_sql(source_sql, verbose)
+	frappe.connect()
 
-	frappe.connect(db_name=db_name)
 	if "tabDefaultValue" not in frappe.db.get_tables(cached=False):
 		from click import secho
 
 		secho(
 			"Table 'tabDefaultValue' missing in the restored site. "
-			"Database not installed correctly, this can due to lack of "
-			"permission, or that the database name exists. Check your mysql"
-			" root password, validity of the backup file or use --force to"
-			" reinstall",
+			"This happens when the backup fails to restore. Please check that the file is valid\n"
+			"Do go through the above output to check the exact error message from MariaDB",
 			fg="red",
 		)
 		sys.exit(1)
@@ -97,37 +87,11 @@ def import_db_from_sql(source_sql=None, verbose=False):
 	db_name = frappe.conf.db_name
 	if not source_sql:
 		source_sql = os.path.join(os.path.dirname(__file__), "framework_mariadb.sql")
-	DbManager(frappe.local.db).restore_database(db_name, source_sql, db_name, frappe.conf.db_password)
+	DbManager(frappe.local.db).restore_database(
+		verbose, db_name, source_sql, db_name, frappe.conf.db_password
+	)
 	if verbose:
 		print("Imported from database %s" % source_sql)
-
-
-def check_database_settings():
-
-	check_compatible_versions()
-
-	# Check each expected value vs. actuals:
-	mariadb_variables = get_mariadb_variables()
-	result = True
-	for key, expected_value in REQUIRED_MARIADB_CONFIG.items():
-		if mariadb_variables.get(key) != expected_value:
-			print(
-				"For key %s. Expected value %s, found value %s"
-				% (key, expected_value, mariadb_variables.get(key))
-			)
-			result = False
-
-	if not result:
-		print(
-			(
-				"{sep2}Creation of your site - {site} failed because MariaDB is not properly {sep}"
-				"configured.{sep2}"
-				"Please verify the above settings in MariaDB's my.cnf.  Restart MariaDB.{sep}"
-				"And then run `bench new-site {site}` again.{sep2}"
-			).format(site=frappe.local.site, sep2="\n\n", sep="\n")
-		)
-
-	return result
 
 
 def check_compatible_versions():
@@ -166,10 +130,12 @@ def get_root_connection(root_login, root_password):
 			root_password = getpass.getpass("MySQL root password: ")
 
 		frappe.local.flags.root_connection = frappe.database.get_db(
+			socket=frappe.conf.db_socket,
 			host=frappe.conf.db_host,
 			port=frappe.conf.db_port,
 			user=root_login,
 			password=root_password,
+			cur_db_name=None,
 		)
 
 	return frappe.local.flags.root_connection

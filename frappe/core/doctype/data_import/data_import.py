@@ -3,17 +3,19 @@
 
 import os
 
+from rq.timeouts import JobTimeoutException
+
 import frappe
 from frappe import _
 from frappe.core.doctype.data_import.exporter import Exporter
 from frappe.core.doctype.data_import.importer import Importer
-from frappe.model import core_doctypes_list
+from frappe.model import CORE_DOCTYPES
 from frappe.model.document import Document
 from frappe.modules.import_file import import_file_by_path
 from frappe.utils.background_jobs import enqueue, is_job_enqueued
 from frappe.utils.csvutils import validate_google_sheets_url
 
-BLOCKED_DOCTYPES = set(core_doctypes_list) - {"User", "Role"}
+BLOCKED_DOCTYPES = CORE_DOCTYPES - {"User", "Role", "Print Format"}
 
 
 class DataImport(Document):
@@ -32,11 +34,12 @@ class DataImport(Document):
 		payload_count: DF.Int
 		reference_doctype: DF.Link
 		show_failed_logs: DF.Check
-		status: DF.Literal["Pending", "Success", "Partial Success", "Error"]
+		status: DF.Literal["Pending", "Success", "Partial Success", "Error", "Timed Out"]
 		submit_after_import: DF.Check
 		template_options: DF.Code | None
 		template_warnings: DF.Code | None
 	# end: auto-generated types
+
 	def validate(self):
 		doc_before_save = self.get_doc_before_save()
 		if (
@@ -89,7 +92,8 @@ class DataImport(Document):
 	def start_import(self):
 		from frappe.utils.scheduler import is_scheduler_inactive
 
-		if is_scheduler_inactive() and not frappe.flags.in_test:
+		run_now = frappe.flags.in_test or frappe.conf.developer_mode
+		if is_scheduler_inactive() and not run_now:
 			frappe.throw(_("Scheduler is inactive. Cannot import data."), title=_("Scheduler Inactive"))
 
 		job_id = f"data_import::{self.name}"
@@ -102,7 +106,7 @@ class DataImport(Document):
 				event="data_import",
 				job_id=job_id,
 				data_import=self.name,
-				now=frappe.conf.developer_mode or frappe.flags.in_test,
+				now=run_now,
 			)
 			return True
 
@@ -117,17 +121,24 @@ class DataImport(Document):
 	def get_importer(self):
 		return Importer(self.reference_doctype, data_import=self)
 
-
-@frappe.whitelist()
-def get_preview_from_template(data_import, import_file=None, google_sheets_url=None):
-	return frappe.get_doc("Data Import", data_import).get_preview_from_template(
-		import_file, google_sheets_url
-	)
+	def on_trash(self):
+		frappe.db.delete("Data Import Log", {"data_import": self.name})
 
 
 @frappe.whitelist()
-def form_start_import(data_import):
-	return frappe.get_doc("Data Import", data_import).start_import()
+def get_preview_from_template(
+	data_import: str, import_file: str | None = None, google_sheets_url: str | None = None
+):
+	di: DataImport = frappe.get_doc("Data Import", data_import)
+	di.check_permission("read")
+	return di.get_preview_from_template(import_file, google_sheets_url)
+
+
+@frappe.whitelist()
+def form_start_import(data_import: str):
+	di: DataImport = frappe.get_doc("Data Import", data_import)
+	di.check_permission("write")
+	return di.start_import()
 
 
 def start_import(data_import):
@@ -136,6 +147,9 @@ def start_import(data_import):
 	try:
 		i = Importer(data_import.reference_doctype, data_import=data_import)
 		i.import_data()
+	except JobTimeoutException:
+		frappe.db.rollback()
+		data_import.db_set("status", "Timed Out")
 	except Exception:
 		frappe.db.rollback()
 		data_import.db_set("status", "Error")
@@ -147,9 +161,7 @@ def start_import(data_import):
 
 
 @frappe.whitelist()
-def download_template(
-	doctype, export_fields=None, export_records=None, export_filters=None, file_type="CSV"
-):
+def download_template(doctype, export_fields=None, export_records=None, export_filters=None, file_type="CSV"):
 	"""
 	Download template from Exporter
 	        :param doctype: Document Type
@@ -158,6 +170,7 @@ def download_template(
 	        :param export_filters: Filter dict
 	        :param file_type: File type to export into
 	"""
+	frappe.has_permission(doctype, "read", throw=True)
 
 	export_fields = frappe.parse_json(export_fields)
 	export_filters = frappe.parse_json(export_filters)
@@ -175,21 +188,25 @@ def download_template(
 
 
 @frappe.whitelist()
-def download_errored_template(data_import_name):
-	data_import = frappe.get_doc("Data Import", data_import_name)
+def download_errored_template(data_import_name: str):
+	data_import: DataImport = frappe.get_doc("Data Import", data_import_name)
+	data_import.check_permission("read")
 	data_import.export_errored_rows()
 
 
 @frappe.whitelist()
-def download_import_log(data_import_name):
-	data_import = frappe.get_doc("Data Import", data_import_name)
+def download_import_log(data_import_name: str):
+	data_import: DataImport = frappe.get_doc("Data Import", data_import_name)
+	data_import.check_permission("read")
 	data_import.download_import_log()
 
 
 @frappe.whitelist()
-def get_import_status(data_import_name):
-	import_status = {}
+def get_import_status(data_import_name: str):
+	data_import: DataImport = frappe.get_doc("Data Import", data_import_name)
+	data_import.check_permission("read")
 
+	import_status = {"status": data_import.status}
 	logs = frappe.get_all(
 		"Data Import Log",
 		fields=["count(*) as count", "success"],
@@ -197,7 +214,7 @@ def get_import_status(data_import_name):
 		group_by="success",
 	)
 
-	total_payload_count = frappe.db.get_value("Data Import", data_import_name, "payload_count")
+	total_payload_count = data_import.payload_count
 
 	for log in logs:
 		if log.get("success"):
@@ -208,6 +225,20 @@ def get_import_status(data_import_name):
 	import_status["total_records"] = total_payload_count
 
 	return import_status
+
+
+@frappe.whitelist()
+def get_import_logs(data_import: str):
+	doc = frappe.get_doc("Data Import", data_import)
+	doc.check_permission("read")
+
+	return frappe.get_all(
+		"Data Import Log",
+		fields=["success", "docname", "messages", "exception", "row_indexes"],
+		filters={"data_import": data_import},
+		limit_page_length=5000,
+		order_by="log_index",
+	)
 
 
 def import_file(doctype, file_path, import_type, submit_after_import=False, console=False):
@@ -261,10 +292,10 @@ def export_json(doctype, path, filters=None, or_filters=None, name=None, order_b
 			for key in del_keys:
 				if key in doc:
 					del doc[key]
-			for k, v in doc.items():
+			for v in doc.values():
 				if isinstance(v, list):
 					for child in v:
-						for key in del_keys + ("docstatus", "doctype", "modified", "name"):
+						for key in (*del_keys, "docstatus", "doctype", "modified", "name"):
 							if key in child:
 								del child[key]
 

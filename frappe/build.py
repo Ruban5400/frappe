@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+from contextlib import suppress
 from subprocess import getoutput
 from tempfile import mkdtemp
 from urllib.parse import urlparse
@@ -178,9 +179,6 @@ def symlink(target, link_name, overwrite=False):
 	if not overwrite:
 		return os.symlink(target, link_name)
 
-	# os.replace() may fail if files are on different filesystems
-	link_dir = os.path.dirname(link_name)
-
 	# Create link to target with temporary filename
 	while True:
 		temp_link_name = f"tmp{frappe.generate_hash()}"
@@ -200,7 +198,7 @@ def symlink(target, link_name, overwrite=False):
 		if os.path.isdir(link_name):
 			raise IsADirectoryError(f"Cannot symlink over existing directory: '{link_name}'")
 		try:
-			os.replace(temp_link_name, link_name)
+			shutil.move(temp_link_name, link_name)
 		except AttributeError:
 			os.renames(temp_link_name, link_name)
 	except Exception:
@@ -255,6 +253,9 @@ def bundle(
 	check_node_executable()
 	frappe_app_path = frappe.get_app_source_path("frappe")
 	frappe.commands.popen(command, cwd=frappe_app_path, env=get_node_env(), raise_err=True)
+
+	with suppress(Exception):
+		frappe.cache.flushall()
 
 
 def watch(apps=None):
@@ -375,17 +376,16 @@ def make_asset_dirs(hard_link=False):
 	symlinks = generate_assets_map()
 
 	for source, target in symlinks.items():
-		start_message = unstrip(
-			f"{'Copying assets from' if hard_link else 'Linking'} {source} to {target}"
-		)
+		start_message = unstrip(f"{'Copying assets from' if hard_link else 'Linking'} {source} to {target}")
 		fail_message = unstrip(f"Cannot {'copy' if hard_link else 'link'} {source} to {target}")
 
 		# Used '\r' instead of '\x1b[1K\r' to print entire lines in smaller terminal sizes
 		try:
 			print(start_message, end="\r")
 			link_assets_dir(source, target, hard_link=hard_link)
-		except Exception:
-			print(fail_message, end="\r")
+		except Exception as e:
+			print(e)
+			print(fail_message)
 
 	click.echo(unstrip(click.style("✔", fg="green") + " Application Assets Linked") + "\n")
 

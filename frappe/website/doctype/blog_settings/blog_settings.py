@@ -29,6 +29,7 @@ class BlogSettings(Document):
 		show_cta_in_blog: DF.Check
 		subtitle: DF.Data | None
 		title: DF.Data | None
+
 	# end: auto-generated types
 	def on_update(self):
 		from frappe.website.utils import clear_cache
@@ -38,8 +39,8 @@ class BlogSettings(Document):
 
 
 def get_like_limit():
-	return frappe.db.get_single_value("Blog Settings", "like_limit") or 5
+	return frappe.get_single_value("Blog Settings", "like_limit") or 5
 
 
 def get_comment_limit():
-	return frappe.db.get_single_value("Blog Settings", "comment_limit") or 5
+	return frappe.get_single_value("Blog Settings", "comment_limit") or 5

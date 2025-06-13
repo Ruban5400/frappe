@@ -20,18 +20,19 @@ let slots = useSlots();
 				type="checkbox"
 				:checked="value"
 				:disabled="read_only"
-				@change="event => $emit('update:modelValue', event.target.checked)"
+				@change="(event) => $emit('update:modelValue', event.target.checked)"
 			/>
-			<span class="label-area" :class="{ reqd: df.reqd }">{{ df.label }}</span>
+			<span class="label-area" :class="{ reqd: df.reqd }">{{ __(df.label) }}</span>
 		</label>
 
 		<!-- description -->
-		<div v-if="df.description" class="mt-2 description" v-html="df.description"></div>
+		<div v-if="df.description" class="mt-2 description" v-html="__(df.description)"></div>
 	</div>
 </template>
 
 <style lang="scss" scoped>
-label, input {
+label,
+input {
 	margin-bottom: 0 !important;
 	cursor: pointer;
 }

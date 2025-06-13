@@ -9,7 +9,6 @@ class TestTestUtils(FrappeTestCase):
 	SHOW_TRANSACTION_COMMIT_WARNINGS = True
 
 	def test_document_assertions(self):
-
 		currency = frappe.new_doc("Currency")
 		currency.currency_name = "STONKS"
 		currency.smallest_currency_fraction_value = 0.420_001
@@ -24,10 +23,10 @@ class TestTestUtils(FrappeTestCase):
 		current_setting = frappe.get_system_settings("logout_on_password_reset")
 
 		with change_settings("System Settings", {"logout_on_password_reset": int(not current_setting)}):
-			updated_settings = frappe.get_system_settings("logout_on_password_reset")
+			updated_settings = frappe.get_single_value("System Settings", "logout_on_password_reset")
 			self.assertNotEqual(current_setting, updated_settings)
 
-		restored_settings = frappe.get_system_settings("logout_on_password_reset")
+		restored_settings = frappe.get_single_value("System Settings", "logout_on_password_reset")
 		self.assertEqual(current_setting, restored_settings)
 
 	def test_time_freezing(self):

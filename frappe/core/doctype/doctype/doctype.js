@@ -3,9 +3,10 @@
 
 frappe.ui.form.on("DocType", {
 	onload: function (frm) {
-		if (frm.is_new()) {
+		if (frm.is_new() && !frm.doc?.fields) {
 			frappe.listview_settings["DocType"].new_doctype_dialog();
 		}
+		frm.call("check_pending_migration");
 	},
 
 	before_save: function (frm) {
@@ -61,7 +62,7 @@ frappe.ui.form.on("DocType", {
 			}
 		}
 
-		const customize_form_link = "<a href='/app/customize-form'>Customize Form</a>";
+		const customize_form_link = `<a href="/app/customize-form">${__("Customize Form")}</a>`;
 		if (!frappe.boot.developer_mode && !frm.doc.custom) {
 			// make the document read-only
 			frm.set_read_only();

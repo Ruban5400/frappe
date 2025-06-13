@@ -45,9 +45,16 @@
 .layout-side-section.print-preview-sidebar {
 	padding-right: var(--padding-md);
 
+	.checkbox label {
+		align-items: unset;
+	}
+
+	.input-area {
+		margin-top: 0.2rem;
+	}
 
 	.label-area {
-		white-space: nowrap;
+		white-space: unset;
 	}
 }
 
@@ -73,7 +80,6 @@
 	}
 
 	.skeleton-body {
-
 		.skeleton-table {
 			width: 100%;
 
@@ -144,9 +150,8 @@
 		background-position: -100px;
 	}
 
-	50%, 100% {
+	50%,
+	100% {
 		background-position: 500px;
 	}
 }
-
-

@@ -10,6 +10,7 @@ import frappe
 from frappe.cache_manager import clear_doctype_cache
 from frappe.core.doctype.doctype.doctype import (
 	CannotIndexedError,
+	DocType,
 	DoctypeLinkError,
 	HiddenAndMandatoryWithoutDefaultError,
 	IllegalMandatoryError,
@@ -24,6 +25,7 @@ from frappe.desk.form.load import getdoc
 from frappe.model.delete_doc import delete_controllers
 from frappe.model.sync import remove_orphan_doctypes
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import get_table_name
 
 
 class TestDocType(FrappeTestCase):
@@ -220,9 +222,7 @@ class TestDocType(FrappeTestCase):
 			self.assertListEqual(
 				[f["fieldname"] for f in test_doctype_json["fields"]], test_doctype_json["field_order"]
 			)
-			self.assertListEqual(
-				[f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order
-			)
+			self.assertListEqual([f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order)
 			self.assertListEqual(test_doctype_json["field_order"], initial_fields_order)
 
 			# remove field_order to test reload_doc/sync/migrate is backwards compatible without field_order
@@ -246,9 +246,7 @@ class TestDocType(FrappeTestCase):
 			self.assertListEqual(
 				[f["fieldname"] for f in test_doctype_json["fields"]], test_doctype_json["field_order"]
 			)
-			self.assertListEqual(
-				[f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order
-			)
+			self.assertListEqual([f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order)
 			self.assertListEqual(test_doctype_json["field_order"], initial_fields_order)
 
 			# reorder fields: swap row 1 and 3
@@ -259,9 +257,7 @@ class TestDocType(FrappeTestCase):
 			# assert that reordering fields only affects `field_order` rather than `fields` attr
 			test_doctype.save()
 			test_doctype_json = frappe.get_file_json(path)
-			self.assertListEqual(
-				[f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order
-			)
+			self.assertListEqual([f["fieldname"] for f in test_doctype_json["fields"]], initial_fields_order)
 			self.assertListEqual(
 				test_doctype_json["field_order"], ["field_3", "field_2", "field_1", "field_4"]
 			)
@@ -779,6 +775,43 @@ class TestDocType(FrappeTestCase):
 		self.assertTrue(doctype.fields[1].in_list_view)
 		frappe.delete_doc("DocType", doctype.name)
 
+	def test_no_recursive_fetch(self):
+		recursive_dt = new_doctype(
+			fields=[
+				{
+					"label": "User",
+					"fieldname": "user",
+					"fieldtype": "Link",
+					"fetch_from": "user.email",
+				}
+			],
+		)
+		self.assertRaises(frappe.ValidationError, recursive_dt.insert)
+
+	def test_row_compression(self):
+		if frappe.db.db_type != "mariadb":
+			return
+
+		compressed_dt = new_doctype(row_format="Compressed").insert().name
+		dynamic_dt = new_doctype().insert().name
+
+		information_schema = frappe.qb.Schema("information_schema")
+
+		def get_format(dt):
+			return (
+				frappe.qb.from_(information_schema.tables)
+				.select("row_format")
+				.where(
+					(information_schema.tables.table_schema == frappe.conf.db_name)
+					& (information_schema.tables.table_name == get_table_name(dt))
+				)
+				.run()[0][0]
+				.upper()
+			)
+
+		self.assertEqual(get_format(compressed_dt), "COMPRESSED")
+		self.assertEqual(get_format(dynamic_dt), "DYNAMIC")
+
 
 def new_doctype(
 	name: str | None = None,
@@ -786,8 +819,9 @@ def new_doctype(
 	depends_on: str = "",
 	fields: list[dict] | None = None,
 	custom: bool = True,
+	default: str | None = None,
 	**kwargs,
-):
+) -> "DocType":
 	if not name:
 		# Test prefix is required to avoid coverage
 		name = "Test " + "".join(random.sample(string.ascii_lowercase, 10))
@@ -803,6 +837,7 @@ def new_doctype(
 					"fieldname": "some_fieldname",
 					"fieldtype": "Data",
 					"unique": unique,
+					"default": default,
 					"depends_on": depends_on,
 				}
 			],

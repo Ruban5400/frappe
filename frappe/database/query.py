@@ -1,5 +1,6 @@
 import re
 from ast import literal_eval
+from functools import lru_cache
 from types import BuiltinFunctionType
 from typing import TYPE_CHECKING
 
@@ -47,6 +48,8 @@ class Engine:
 		delete: bool = False,
 		*,
 		validate_filters: bool = False,
+		skip_locked: bool = False,
+		wait: bool = True,
 	) -> QueryBuilder:
 		self.is_mariadb = frappe.db.db_type == "mariadb"
 		self.is_postgres = frappe.db.db_type == "postgres"
@@ -83,7 +86,7 @@ class Engine:
 			self.query = self.query.distinct()
 
 		if for_update:
-			self.query = self.query.for_update()
+			self.query = self.query.for_update(skip_locked=skip_locked, nowait=not wait)
 
 		if group_by:
 			self.query = self.query.groupby(group_by)
@@ -98,7 +101,7 @@ class Engine:
 		# add fields
 		self.fields = self.parse_fields(fields)
 		if not self.fields:
-			self.fields = [getattr(self.table, "name")]
+			self.fields = [self.table.name]
 
 		self.query._child_queries = []
 		for field in self.fields:
@@ -116,7 +119,7 @@ class Engine:
 		if filters is None:
 			return
 
-		if isinstance(filters, (str, int)):
+		if isinstance(filters, str | int):
 			filters = {"name": str(filters)}
 
 		if isinstance(filters, Criterion):
@@ -125,14 +128,14 @@ class Engine:
 		elif isinstance(filters, dict):
 			self.apply_dict_filters(filters)
 
-		elif isinstance(filters, (list, tuple)):
-			if all(isinstance(d, (str, int)) for d in filters) and len(filters) > 0:
+		elif isinstance(filters, list | tuple):
+			if all(isinstance(d, str | int) for d in filters) and len(filters) > 0:
 				self.apply_dict_filters({"name": ("in", filters)})
 			else:
 				for filter in filters:
-					if isinstance(filter, (str, int, Criterion, dict)):
+					if isinstance(filter, str | int | Criterion | dict):
 						self.apply_filters(filter)
-					elif isinstance(filter, (list, tuple)):
+					elif isinstance(filter, list | tuple):
 						self.apply_list_filters(filter)
 
 	def apply_list_filters(self, filter: list):
@@ -149,7 +152,7 @@ class Engine:
 	def apply_dict_filters(self, filters: dict[str, str | int | list]):
 		for field, value in filters.items():
 			operator = "="
-			if isinstance(value, (list, tuple)):
+			if isinstance(value, list | tuple):
 				operator, value = value
 
 			self._apply_filter(field, value, operator)
@@ -163,9 +166,7 @@ class Engine:
 
 		if not isinstance(_field, str):
 			pass
-		elif not self.validate_filters and (
-			dynamic_field := DynamicTableField.parse(field, self.doctype)
-		):
+		elif not self.validate_filters and (dynamic_field := DynamicTableField.parse(field, self.doctype)):
 			# apply implicit join if link field's field is referenced
 			self.query = dynamic_field.apply_join(self.query)
 			_field = dynamic_field.field
@@ -188,7 +189,7 @@ class Engine:
 		if isinstance(_value, bool):
 			_value = int(_value)
 
-		elif not _value and isinstance(_value, (list, tuple)):
+		elif not _value and isinstance(_value, list | tuple):
 			_value = ("",)
 
 		# Nested set
@@ -248,7 +249,11 @@ class Engine:
 							)
 
 				field = (
-					(Field(initial_fields) if "`" not in initial_fields else PseudoColumnMapper(initial_fields))
+					(
+						Field(initial_fields)
+						if "`" not in initial_fields
+						else PseudoColumnMapper(initial_fields)
+					)
 					if not has_primitive_operator
 					else field
 				)
@@ -268,19 +273,13 @@ class Engine:
 			return Function(func, *_args, alias=alias or None)
 
 	def sanitize_fields(self, fields: str | list | tuple):
-		def _sanitize_field(field: str):
-			if not isinstance(field, str):
-				return field
-			stripped_field = sqlparse.format(field, strip_comments=True, keyword_case="lower")
-			if self.is_mariadb:
-				return MARIADB_SPECIFIC_COMMENT.sub("", stripped_field)
-			return stripped_field
-
-		if isinstance(fields, (list, tuple)):
-			return [_sanitize_field(field) for field in fields]
+		if isinstance(fields, list | tuple):
+			return [
+				_sanitize_field(field, self.is_mariadb) if isinstance(field, str) else field
+				for field in fields
+			]
 		elif isinstance(fields, str):
-			return _sanitize_field(fields)
-
+			return _sanitize_field(fields, self.is_mariadb)
 		return fields
 
 	def parse_string_field(self, field: str):
@@ -301,10 +300,10 @@ class Engine:
 		if not fields:
 			return []
 		fields = self.sanitize_fields(fields)
-		if isinstance(fields, (list, tuple, set)) and None in fields and Field not in fields:
+		if isinstance(fields, list | tuple | set) and None in fields and Field not in fields:
 			return []
 
-		if not isinstance(fields, (list, tuple)):
+		if not isinstance(fields, list | tuple):
 			fields = [fields]
 
 		def parse_field(field: str):
@@ -501,7 +500,7 @@ class ChildQuery:
 		}
 		return frappe.qb.get_query(
 			self.doctype,
-			fields=self.fields + ["parent", "parentfield"],
+			fields=[*self.fields, "parent", "parentfield"],
 			filters=filters,
 			order_by="idx asc",
 		)
@@ -517,7 +516,7 @@ def literal_eval_(literal):
 def has_function(field):
 	_field = field.casefold() if (isinstance(field, str) and "`" not in field) else field
 	if not issubclass(type(_field), Criterion):
-		if any([f"{func}(" in _field for func in SQL_FUNCTIONS]):
+		if any([f"{func}(" in _field for func in SQL_FUNCTIONS]):  # ) <- ignore this comment.
 			return True
 
 
@@ -551,3 +550,15 @@ def get_nested_set_hierarchy_result(doctype: str, name: str, hierarchy: str) -> 
 			.run(pluck=True)
 		)
 	return result
+
+
+@lru_cache(maxsize=1024)
+def _sanitize_field(field: str, is_mariadb):
+	if field == "*" or not SPECIAL_CHAR_PATTERN.search(field):
+		# Skip checking if there are no special characters
+		return field
+
+	stripped_field = sqlparse.format(field, strip_comments=True, keyword_case="lower")
+	if is_mariadb:
+		return MARIADB_SPECIFIC_COMMENT.sub("", stripped_field)
+	return stripped_field

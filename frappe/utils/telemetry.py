@@ -1,9 +1,11 @@
-""" Basic telemetry for improving apps.
+"""Basic telemetry for improving apps.
 
 WARNING: Everything in this file should be treated "internal" and is subjected to change or get
 removed without any warning.
 """
+
 from contextlib import suppress
+from functools import lru_cache
 
 import frappe
 from frappe.utils import getdate
@@ -50,7 +52,22 @@ def init_telemetry():
 		return
 
 	with suppress(Exception):
-		frappe.local.posthog = Posthog(posthog_project_id, host=posthog_host)
+		frappe.local.posthog = _get_posthog_instance(posthog_project_id, posthog_host)
+
+	# Background jobs might exit before flushing telemetry, so explicitly flush queue
+	if frappe.job:
+		frappe.job.after_job.add(flush_telemetry)
+
+
+@lru_cache
+def _get_posthog_instance(project_id, host):
+	return Posthog(project_id, host=host, timeout=5, max_retries=3)
+
+
+def flush_telemetry():
+	ph: Posthog = getattr(frappe.local, "posthog", None)
+	with suppress(Exception):
+		ph and ph.flush()
 
 
 def capture(event, app, **kwargs):
@@ -58,16 +75,6 @@ def capture(event, app, **kwargs):
 	ph: Posthog = getattr(frappe.local, "posthog", None)
 	with suppress(Exception):
 		ph and ph.capture(distinct_id=frappe.local.site, event=f"{app}_{event}", **kwargs)
-
-
-def flush():
-	"""Forcefully flush pending events.
-
-	This is required in context of background jobs where process might die before posthog gets time
-	to push events."""
-	ph: Posthog = getattr(frappe.local, "posthog", None)
-	with suppress(Exception):
-		ph and ph.flush()
 
 
 def capture_doc(doc, action):

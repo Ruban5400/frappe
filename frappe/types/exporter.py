@@ -91,6 +91,8 @@ class TypeExporter:
 		for field in self.doc.fields:
 			if iskeyword(field.fieldname):
 				continue
+			if field.is_virtual and not field.options:
+				continue
 			if python_type := self._map_fieldtype(field):
 				self.field_types[field.fieldname] = python_type
 
@@ -178,7 +180,7 @@ class TypeExporter:
 		elif field.fieldtype == "Select":
 			if not field.options:
 				# Could be dynamic
-				return
+				return "[None]"
 			options = [o.strip() for o in field.options.split("\n")]
 			return json.dumps(options)
 

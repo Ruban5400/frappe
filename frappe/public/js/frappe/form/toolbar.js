@@ -73,11 +73,20 @@ frappe.ui.form.Toolbar = class Toolbar {
 		let doc_field = this.frm.get_docfield(title_field);
 
 		if (
+			this.frm.meta.naming_rule === "By fieldname" &&
+			this.frm.meta.autoname === "field:" + title_field &&
+			!this.frm.meta.allow_rename
+		) {
+			return false;
+		}
+
+		if (
 			title_field &&
 			this.frm.perm[0].write &&
 			!this.frm.doc.__islocal &&
 			doc_field.fieldtype === "Data" &&
-			!doc_field.read_only
+			!doc_field.read_only &&
+			!doc_field.set_only_once
 		) {
 			return true;
 		} else {
@@ -201,23 +210,33 @@ frappe.ui.form.Toolbar = class Toolbar {
 				});
 			}
 
+			let is_title_field_same_as_autoname = false;
+
 			// check if docname is updatable
 			if (me.can_rename()) {
 				let label = __("New Name");
 				if (me.frm.meta.autoname && me.frm.meta.autoname.startsWith("field:")) {
 					let fieldname = me.frm.meta.autoname.split(":")[1];
 					label = __("New {0}", [me.frm.get_docfield(fieldname).label]);
+					is_title_field_same_as_autoname = fieldname === title_field;
+				}
+
+				if (!is_title_field_same_as_autoname) {
+					fields.push(
+						...[
+							{
+								label: label,
+								fieldname: "name",
+								fieldtype: "Data",
+								reqd: 1,
+								default: docname,
+							},
+						]
+					);
 				}
 
 				fields.push(
 					...[
-						{
-							label: label,
-							fieldname: "name",
-							fieldtype: "Data",
-							reqd: 1,
-							default: docname,
-						},
 						{
 							label: __("Merge with existing"),
 							fieldname: "merge",
@@ -238,6 +257,11 @@ frappe.ui.form.Toolbar = class Toolbar {
 				d.set_primary_action(__("Rename"), (values) => {
 					d.disable_primary_action();
 					d.hide();
+
+					if (is_title_field_same_as_autoname) {
+						values.name = values.title;
+					}
+
 					this.rename_document_title(values.name, values.title, values.merge)
 						.then(() => {
 							d.hide();
@@ -372,7 +396,7 @@ frappe.ui.form.Toolbar = class Toolbar {
 		}
 
 		// duplicate
-		if (in_list(frappe.boot.user.can_create, me.frm.doctype) && !me.frm.meta.allow_copy) {
+		if (frappe.boot.user.can_create.includes(me.frm.doctype) && !me.frm.meta.allow_copy) {
 			this.page.add_menu_item(
 				__("Duplicate"),
 				function () {
@@ -453,7 +477,7 @@ frappe.ui.form.Toolbar = class Toolbar {
 			},
 			true,
 			{
-				shortcut: "ctrl+z",
+				shortcut: "Ctrl+Z",
 				condition: () => !this.frm.is_form_builder(),
 				description: __("Undo last action"),
 			}
@@ -465,7 +489,7 @@ frappe.ui.form.Toolbar = class Toolbar {
 			},
 			true,
 			{
-				shortcut: "ctrl+y",
+				shortcut: "Ctrl+Y",
 				condition: () => !this.frm.is_form_builder(),
 				description: __("Redo last action"),
 			}
